@@ -1,6 +1,6 @@
+import { AttributeType } from '../../../attributes/types'
 import MemberRepository from '../../memberRepository'
 import RawQueryParser from '../rawQueryParser'
-import { AttributeType } from '../../../attributes/types'
 
 describe('RawQueryParser', () => {
   it('Should parse simple filter with an empty second operand', () => {

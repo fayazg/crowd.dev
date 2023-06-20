@@ -1,13 +1,13 @@
 import { IDbMemberSyncData } from '@/repo/member.data'
 import { MemberRepository } from '@/repo/member.repo'
 import { OpenSearchIndex } from '@/types'
-import { timeout } from '@crowd/common'
+import { groupBy, timeout } from '@crowd/common'
 import { DbStore } from '@crowd/database'
 import { Logger, LoggerBase, logExecutionTime } from '@crowd/logging'
 import { RedisClient } from '@crowd/redis'
 import { IMemberAttribute, MemberAttributeType } from '@crowd/types'
 import { OpenSearchService } from './opensearch.service'
-import { ISearchHit } from './opensearch.data'
+import { IIndexRequest, ISearchHit } from './opensearch.data'
 
 export class MemberSyncService extends LoggerBase {
   private readonly memberRepo: MemberRepository
@@ -37,35 +37,32 @@ export class MemberSyncService extends LoggerBase {
     }
 
     const sort = [{ date_joinedAt: 'asc' }]
-    const include = ['date_joinedAt', 'uuid_memberId']
+    const include = ['date_joinedAt']
     const pageSize = 500
     let lastJoinedAt: string
 
-    let results: ISearchHit<{ date_joinedAt: string; uuid_memberId: string }>[] =
-      await this.openSearchService.search(
-        OpenSearchIndex.MEMBERS,
-        query,
-        pageSize,
-        sort,
-        undefined,
-        include,
-      )
+    let results: ISearchHit<{ date_joinedAt: string }>[] = await this.openSearchService.search(
+      OpenSearchIndex.MEMBERS,
+      query,
+      pageSize,
+      sort,
+      undefined,
+      include,
+    )
 
     let processed = 0
 
     while (results.length > 0) {
-      // check every member if they exists in the database and if not remove them from the index
-      const dbIds = await this.memberRepo.checkMembersExists(
-        tenantId,
-        results.map((r) => r._source.uuid_memberId),
-      )
+      const ids = results.map((r) => r._id)
 
-      const toRemove = results.filter((r) => !dbIds.includes(r._source.uuid_memberId))
+      // check every member if they exists in the database and if not remove them from the index
+      const dbIds = await this.memberRepo.checkMembersExists(tenantId, ids)
+      const toRemove = ids.filter((id) => !dbIds.includes(id))
 
       if (toRemove.length > 0) {
         this.log.warn({ tenantId, toRemove }, 'Removing members from index!')
         for (const id of toRemove) {
-          await this.removeMember(id._id)
+          await this.removeMember(id)
         }
       }
 
@@ -92,48 +89,7 @@ export class MemberSyncService extends LoggerBase {
 
   public async removeMember(memberId: string): Promise<void> {
     this.log.warn({ memberId }, 'Removing member from index!')
-
-    const query = {
-      bool: {
-        filter: {
-          term: {
-            uuid_memberId: memberId,
-          },
-        },
-      },
-    }
-
-    const sort = [{ date_joinedAt: 'asc' }]
-    const include = ['date_joinedAt']
-    const pageSize = 10
-    let lastJoinedAt: string
-
-    let results: ISearchHit<{ date_joinedAt: string }>[] = await this.openSearchService.search(
-      OpenSearchIndex.MEMBERS,
-      query,
-      pageSize,
-      sort,
-      undefined,
-      include,
-    )
-
-    while (results.length > 0) {
-      const ids = results.map((r) => r._id)
-      for (const id of ids) {
-        await this.openSearchService.removeFromIndex(id, OpenSearchIndex.MEMBERS)
-      }
-
-      // use last joinedAt to get the next page
-      lastJoinedAt = results[results.length - 1]._source.date_joinedAt
-      results = await this.openSearchService.search(
-        OpenSearchIndex.MEMBERS,
-        query,
-        pageSize,
-        sort,
-        lastJoinedAt,
-        include,
-      )
-    }
+    await this.openSearchService.removeFromIndex(memberId, OpenSearchIndex.MEMBERS)
   }
 
   public async syncTenantMembers(tenantId: string, reset = true, batchSize = 500): Promise<void> {
@@ -151,22 +107,27 @@ export class MemberSyncService extends LoggerBase {
         let memberIds = await this.memberRepo.getTenantMembersForSync(tenantId, 1, batchSize)
 
         while (memberIds.length > 0) {
-          const members = await this.memberRepo.getMemberData(memberIds)
+          const allMembers = await this.memberRepo.getMemberData(memberIds)
 
-          if (members.length > 0) {
-            await this.openSearchService.bulkIndex(
-              OpenSearchIndex.MEMBERS,
-              members.map((m) => {
-                return {
-                  id: `${m.id}-${m.segmentId}`,
-                  body: MemberSyncService.prefixData(m, attributes),
-                }
-              }),
-            )
-            count += members.length
+          const grouped = groupBy(allMembers, (m) => m.id)
+
+          if (grouped.size > 0) {
+            const ids = Array.from(grouped.keys())
+            const prepared: IIndexRequest<unknown>[] = []
+
+            for (const memberId of ids) {
+              const members = grouped.get(memberId)
+              prepared.push({
+                id: memberId,
+                body: MemberSyncService.prefixData(members, attributes),
+              })
+            }
+
+            await this.openSearchService.bulkIndex(OpenSearchIndex.MEMBERS, prepared)
+
+            count += ids.length
+            await this.memberRepo.markSynced(ids)
           }
-
-          await this.memberRepo.markSynced(members.map((m) => m.id))
 
           this.log.info({ tenantId }, `Synced ${count} members!`)
           memberIds = await this.memberRepo.getTenantMembersForSync(tenantId, 1, batchSize)
@@ -185,16 +146,9 @@ export class MemberSyncService extends LoggerBase {
     const members = await this.memberRepo.getMemberData([memberId])
 
     if (members.length > 0) {
-      for (const member of members) {
-        const attributes = await this.memberRepo.getTenantMemberAttributes(member.tenantId)
-
-        const prepared = MemberSyncService.prefixData(member, attributes)
-        await this.openSearchService.index(
-          `${memberId}-${member.segmentId}`,
-          OpenSearchIndex.MEMBERS,
-          prepared,
-        )
-      }
+      const attributes = await this.memberRepo.getTenantMemberAttributes(members[0].tenantId)
+      const prepared = MemberSyncService.prefixData(members, attributes)
+      await this.openSearchService.index(memberId, OpenSearchIndex.MEMBERS, prepared)
       await this.memberRepo.markSynced([memberId])
     } else {
       // we should retry - sometimes database is slow
@@ -208,13 +162,16 @@ export class MemberSyncService extends LoggerBase {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private static prefixData(data: IDbMemberSyncData, attributes: IMemberAttribute[]): any {
+  private static prefixData(
+    segmentedMembers: IDbMemberSyncData[],
+    attributes: IMemberAttribute[],
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ): any {
+    const data = segmentedMembers[0]
     const p: Record<string, unknown> = {}
 
     p.uuid_memberId = data.id
     p.uuid_tenantId = data.tenantId
-    p.uuid_segmentId = data.segmentId
     p.string_displayName = data.displayName
     const p_attributes = {}
 
@@ -247,12 +204,6 @@ export class MemberSyncService extends LoggerBase {
     p.date_joinedAt = data.joinedAt
     p.int_totalReach = data.totalReach
     p.int_numberOfOpenSourceContributions = data.numberOfOpenSourceContributions
-    p.string_arr_activeOn = data.activeOn
-    p.int_activityCount = data.activityCount
-    p.string_arr_activityTypes = data.activityTypes
-    p.int_activeDaysCount = data.activeDaysCount
-    p.date_lastActive = data.lastActive
-    p.float_averageSentiment = data.averageSentiment
 
     const p_identities = []
     for (const identity of data.identities) {
@@ -263,28 +214,45 @@ export class MemberSyncService extends LoggerBase {
     }
     p.obj_arr_identities = p_identities
 
-    const p_organizations = []
-    for (const organization of data.organizations) {
-      p_organizations.push({
-        uuid_id: organization.id,
-        string_logo: organization.logo,
-        string_displayName: organization.displayName,
-      })
-    }
-    p.obj_arr_organizations = p_organizations
-
-    const p_tags = []
-    for (const tag of data.tags) {
-      p_tags.push({
-        uuid_id: tag.id,
-        string_name: tag.name,
-      })
-    }
-
-    p.obj_arr_tags = p_tags
-
     p.uuid_arr_toMergeIds = data.toMergeIds
     p.uuid_arr_noMergeIds = data.noMergeIds
+
+    const p_segments = []
+
+    for (const segData of segmentedMembers) {
+      const p_organizations = []
+
+      for (const organization of segData.organizations) {
+        p_organizations.push({
+          uuid_id: organization.id,
+          string_logo: organization.logo,
+          string_displayName: organization.displayName,
+        })
+      }
+
+      const p_tags = []
+      for (const tag of segData.tags) {
+        p_tags.push({
+          uuid_id: tag.id,
+          string_name: tag.name,
+        })
+      }
+
+      p_segments.push({
+        uuid_segmentId: segData.segmentId,
+
+        obj_arr_organizations: p_organizations,
+        obj_arr_tags: p_tags,
+        string_arr_activeOn: segData.activeOn,
+        int_activityCount: segData.activityCount,
+        string_arr_activityTypes: segData.activityTypes,
+        int_activeDaysCount: segData.activeDaysCount,
+        date_lastActive: segData.lastActive,
+        float_averageSentiment: segData.averageSentiment,
+      })
+    }
+
+    p.obj_arr_segments = p_segments
 
     return p
   }

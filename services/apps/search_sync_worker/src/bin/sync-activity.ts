@@ -32,5 +32,6 @@ setImmediate(async () => {
     process.exit(1)
   } else {
     await emitter.triggerActivitySync(results[0].tenantId, activityId)
+    process.exit(0)
   }
 })

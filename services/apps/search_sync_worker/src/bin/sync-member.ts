@@ -34,6 +34,8 @@ setImmediate(async () => {
     log.error(`Member ${memberId} not found!`)
     process.exit(1)
   } else {
+    log.info(`Syncing member ${memberId}...`)
     await emitter.triggerMemberSync(results[0].tenantId, memberId)
+    process.exit(0)
   }
 })

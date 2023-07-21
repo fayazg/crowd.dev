@@ -461,12 +461,24 @@ class SegmentRepository extends RepositoryBase<
   async queryProjectGroups(criteria: QueryData): Promise<PageData<SegmentData>> {
     let searchQuery = 'WHERE 1=1'
 
+    const replacements = {
+      tenantId: this.currentTenant.id,
+      name: `%${criteria.filter?.name}%`,
+      status: criteria.filter?.status,
+    }
+
     if (criteria.filter?.status) {
       searchQuery += `AND s.status = :status`
     }
 
     if (criteria.filter?.name) {
       searchQuery += `AND s.name ilike :name`
+    }
+
+    if (criteria.filter?.adminOnly) {
+      searchQuery += `AND s.id IN (:adminSegments)`
+      replacements.adminSegments = this.options.currentUser.tenants.flatMap((t) => t.adminSegments)
+      console.log('adminOnly', replacements)
     }
 
     const projectGroups = await this.options.database.sequelize.query(
@@ -524,11 +536,7 @@ class SegmentRepository extends RepositoryBase<
           ${this.getPaginationString(criteria)};
       `,
       {
-        replacements: {
-          tenantId: this.currentTenant.id,
-          name: `%${criteria.filter?.name}%`,
-          status: criteria.filter?.status,
-        },
+        replacements,
         type: QueryTypes.SELECT,
       },
     )

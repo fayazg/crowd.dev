@@ -465,6 +465,7 @@ class SegmentRepository extends RepositoryBase<
       tenantId: this.currentTenant.id,
       name: `%${criteria.filter?.name}%`,
       status: criteria.filter?.status,
+      adminSegments: null,
     }
 
     if (criteria.filter?.status) {
@@ -478,7 +479,6 @@ class SegmentRepository extends RepositoryBase<
     if (criteria.filter?.adminOnly) {
       searchQuery += `AND s.id IN (:adminSegments)`
       replacements.adminSegments = this.options.currentUser.tenants.flatMap((t) => t.adminSegments)
-      console.log('adminOnly', replacements)
     }
 
     const projectGroups = await this.options.database.sequelize.query(

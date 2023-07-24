@@ -575,17 +575,34 @@ class SegmentRepository extends RepositoryBase<
       searchQuery += ` AND s."grandparentSlug" = :grandparent_slug `
     }
 
+    if (criteria.filter?.ids) {
+      searchQuery += ` AND (s.id IN (:ids) OR sp.id IN (:ids) OR sgp.id IN (:ids)) `
+      console.log('criteria.filter?.ids', criteria.filter?.ids)
+    }
+
     const subprojects = await this.options.database.sequelize.query(
       `
-            select s.*,
-            count(*) over () as "totalCount"
-            from segments s
-            where s."grandparentSlug" is not null
-            and s."parentSlug" is not null
-            and s."tenantId" = :tenantId
+            SELECT
+              s.*,
+              sp.id AS "projectId",
+              sgp.id AS "projectGroupId",
+              COUNT(*) OVER () AS "totalCount"
+            FROM segments s
+            JOIN segments sp ON sp.slug = s."parentSlug"
+              AND sp."grandparentSlug" IS NULL
+              AND sp."parentSlug" IS NOT NULL
+              AND sp."tenantId" = s."tenantId"
+            JOIN segments sgp ON sgp.slug = sp."parentSlug"
+              AND sgp.slug = s."grandparentSlug"
+              AND sgp."grandparentSlug" IS NULL
+              AND sgp."parentSlug" IS NULL
+              AND sgp."tenantId" = s."tenantId"
+            WHERE s."grandparentSlug" IS NOT NULL
+              AND s."parentSlug" IS NOT NULL
+              AND s."tenantId" = :tenantId
             ${searchQuery}
-            GROUP BY s."id"
-            ORDER BY s."name"
+            GROUP BY s.id, sp.id, sgp.id
+            ORDER BY s.name
             ${this.getPaginationString(criteria)};
             `,
       {
@@ -595,6 +612,7 @@ class SegmentRepository extends RepositoryBase<
           status: criteria.filter?.status,
           parent_slug: `${criteria.filter?.parentSlug}`,
           grandparent_slug: `${criteria.filter?.grandparentSlug}`,
+          ids: criteria.filter?.ids,
         },
         type: QueryTypes.SELECT,
       },

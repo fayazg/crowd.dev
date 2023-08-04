@@ -19,7 +19,7 @@ cube(`Activities`, {
       timeDimension: Activities.date,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
     ActivitiesCumulative: {
@@ -39,7 +39,7 @@ cube(`Activities`, {
       timeDimension: Activities.date,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
   },

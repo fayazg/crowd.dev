@@ -33,7 +33,7 @@ cube(`Members`, {
       timeDimension: Members.joinedAt,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
 
@@ -51,7 +51,7 @@ cube(`Members`, {
       timeDimension: Members.joinedAt,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
 
@@ -70,7 +70,7 @@ cube(`Members`, {
       timeDimension: Members.joinedAt,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
 
@@ -89,7 +89,7 @@ cube(`Members`, {
       timeDimension: Members.joinedAt,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
 
@@ -108,7 +108,7 @@ cube(`Members`, {
       timeDimension: Activities.date,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
 
@@ -128,7 +128,7 @@ cube(`Members`, {
       timeDimension: Activities.date,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
 
@@ -148,7 +148,7 @@ cube(`Members`, {
       timeDimension: Activities.date,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
 
@@ -168,7 +168,7 @@ cube(`Members`, {
       timeDimension: Activities.date,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
   },

@@ -22,7 +22,7 @@ where
       timeDimension: Sentiment.date,
       granularity: `day`,
       refreshKey: {
-        every: `10 minute`,
+        every: `30 minute`,
       },
     },
   },

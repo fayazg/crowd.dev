@@ -1,6 +1,16 @@
 import config from "@/config";
 import { store } from "@/store";
 
+export const FEATURE_FLAGS = {
+  eagleEye: "eagle-eye",
+  organizations: "organizations",
+  automations: "automations",
+  linkedin: "linkedin",
+  memberEnrichment: "member-enrichment",
+  csvExport: "csv-export",
+  hubspot: "hubspot",
+};
+
 class FeatureFlagService {
   constructor() {}
 

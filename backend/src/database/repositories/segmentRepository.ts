@@ -419,8 +419,12 @@ class SegmentRepository extends RepositoryBase<
     }
 
     if (criteria.filter?.adminOnly) {
+      const adminSegments = this.options.currentUser.tenants.flatMap((t) => t.adminSegments)
+      if (adminSegments.length === 0) {
+        return { count: 0, rows: [], limit: criteria.limit, offset: criteria.offset }
+      }
       searchQuery += `AND s.id IN (:adminSegments)`
-      replacements.adminSegments = this.options.currentUser.tenants.flatMap((t) => t.adminSegments)
+      replacements.adminSegments = adminSegments
     }
 
     const projectGroups = await this.options.database.sequelize.query(

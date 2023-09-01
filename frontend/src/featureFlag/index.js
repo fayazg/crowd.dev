@@ -14,7 +14,11 @@ export const FEATURE_FLAGS = {
 class FeatureFlagService {
   constructor() {}
 
-  init(tenant) {}
+  init(tenant) {
+    store.dispatch("tenant/doUpdateFeatureFlag", {
+      isReady: true,
+    });
+  }
 
   isFlagEnabled(flag) {
     return true;

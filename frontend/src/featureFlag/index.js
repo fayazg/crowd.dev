@@ -12,7 +12,9 @@ export const FEATURE_FLAGS = {
 };
 
 class FeatureFlagService {
-  constructor() {}
+  constructor() {
+    this.flags = FEATURE_FLAGS;
+  }
 
   init(tenant) {
     store.dispatch("tenant/doUpdateFeatureFlag", {

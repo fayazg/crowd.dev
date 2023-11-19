@@ -1,10 +1,10 @@
 import Sequelize, { QueryTypes } from 'sequelize'
 import { getServiceLogger } from '@crowd/logging'
 import { generateUUIDv1 } from '@crowd/common'
+import { FeatureFlag } from '@crowd/types'
 import { UnleashContextField } from '../../types/unleashContext'
 import { UNLEASH_CONFIG } from '../../conf'
 import Plans from '../../security/plans'
-import { FeatureFlag } from '../../types/common'
 import { PLAN_LIMITS } from '../../feature-flags/isFeatureEnabled'
 
 /* eslint-disable no-console */
@@ -61,17 +61,6 @@ const constaintConfiguration = {
         inverted: false,
         operator: 'NUM_LT',
         contextName: 'automationCount',
-        caseInsensitive: false,
-      },
-    ],
-  ],
-  [FeatureFlag.COMMUNITY_HELP_CENTER_PRO]: [
-    [
-      {
-        values: [Plans.values.growth],
-        inverted: false,
-        operator: 'IN',
-        contextName: 'plan',
         caseInsensitive: false,
       },
     ],
@@ -197,23 +186,6 @@ const constaintConfiguration = {
         caseInsensitive: false,
       },
     ],
-    [
-      {
-        values: [Plans.values.essential],
-        inverted: false,
-        operator: 'IN',
-        contextName: 'plan',
-        caseInsensitive: false,
-      },
-      {
-        value: PLAN_LIMITS[Plans.values.essential][FeatureFlag.MEMBER_ENRICHMENT].toString(),
-        values: [],
-        inverted: false,
-        operator: 'NUM_LT',
-        contextName: 'memberEnrichmentCount',
-        caseInsensitive: false,
-      },
-    ],
   ],
   [FeatureFlag.ORGANIZATION_ENRICHMENT]: [
     [
@@ -250,25 +222,45 @@ const constaintConfiguration = {
         caseInsensitive: false,
       },
     ],
+  ],
+  [FeatureFlag.SEGMENTS]: [],
+
+  // temporal
+  [FeatureFlag.TEMPORAL_AUTOMATIONS]: [
     [
       {
-        values: [Plans.values.essential],
+        values: [
+          Plans.values.scale,
+          Plans.values.eagleEye,
+          Plans.values.enterprise,
+          Plans.values.essential,
+          Plans.values.growth,
+        ],
         inverted: false,
         operator: 'IN',
         contextName: 'plan',
         caseInsensitive: false,
       },
+    ],
+  ],
+
+  [FeatureFlag.SYNCHRONOUS_OPENSEARCH_UPDATES]: [
+    [
       {
-        value: PLAN_LIMITS[Plans.values.essential][FeatureFlag.ORGANIZATION_ENRICHMENT].toString(),
-        values: [],
+        values: [
+          Plans.values.scale,
+          Plans.values.eagleEye,
+          Plans.values.enterprise,
+          Plans.values.essential,
+          Plans.values.growth,
+        ],
         inverted: false,
-        operator: 'NUM_LT',
-        contextName: 'organizationEnrichmentCount',
+        operator: 'IN',
+        contextName: 'plan',
         caseInsensitive: false,
       },
     ],
   ],
-  [FeatureFlag.SEGMENTS]: [],
 }
 
 let seq: any

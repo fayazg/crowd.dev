@@ -10,33 +10,78 @@ export class OrganizationRepository extends RepositoryBase<OrganizationRepositor
   public async getOrganizationData(ids: string[]): Promise<IDbOrganizationSyncData[]> {
     const results = await this.db().any(
       `
-      with organization_segments as (select "segmentId", "organizationId"
-                                    from "organizationSegments"
-                                    where "organizationId" in ($(ids:csv))),
-          member_data as (select os."segmentId",
-                                  os."organizationId",
-                                  count(distinct m.id) filter ( where mo."dateEnd" is null )                  as "memberCount",
-                                  count(distinct a.id)                                                        as "activityCount",
-                                  case
-                                      when array_agg(distinct a.platform) = array [null] then array []::text[]
-                                      else array_agg(distinct a.platform) end                                 as "activeOn",
-                                  max(a.timestamp)                                                            as "lastActive",
-                                  case
-                                      when array_agg(distinct mi.platform) = array [null] then array []::text[]
-                                      else array_agg(distinct mi.platform) end                                as "identities",
-                                  min(a.timestamp) filter ( where a.timestamp <> '1970-01-01T00:00:00.000Z' ) as "joinedAt"
-                          from organization_segments os
-                                    left join activities a
-                                              on a."organizationId" = os."organizationId" and
-                                                a."segmentId" = os."segmentId" and a."deletedAt" is null
-                                    left join members m on a."memberId" = m.id and m."deletedAt" is null
-                                    left join "memberOrganizations" mo
-                                              on m.id = mo."memberId"
-                                              and a."organizationId" = mo."organizationId"
-                                              and mo."deletedAt" is null
-                                    left join "memberIdentities" mi on m.id = mi."memberId"
-                          group by os."segmentId", os."organizationId")
-      select o.id                              as "organizationId",
+        WITH organization_segments AS (
+            SELECT
+                "segmentId",
+                "organizationId"
+            FROM "organizationSegments"
+            WHERE "organizationId" IN ($(ids:csv))
+        ),
+        to_merge_data AS (
+            SELECT
+                otm."organizationId",
+                array_agg(DISTINCT otm."toMergeId"::text) AS to_merge_ids
+            FROM "organizationToMerge" otm
+            INNER JOIN organizations o2 ON otm."toMergeId" = o2.id
+            WHERE otm."organizationId" IN ($(ids:csv))
+              AND o2."deletedAt" IS NULL
+            GROUP BY otm."organizationId"
+        ),
+        no_merge_data AS (
+            SELECT
+                onm."organizationId",
+                array_agg(DISTINCT onm."noMergeId"::text) AS no_merge_ids
+            FROM "organizationNoMerge" onm
+            INNER JOIN organizations o2 ON onm."noMergeId" = o2.id
+            WHERE onm."organizationId" IN ($(ids:csv))
+              AND o2."deletedAt" IS NULL
+            GROUP BY onm."organizationId"
+        ),
+        activities_1 AS (
+            SELECT
+                a.id,
+                a."segmentId",
+                a."organizationId",
+                a."memberId",
+                a.timestamp,
+                a.platform::TEXT
+            FROM activities a
+            JOIN members m ON a."memberId" = m.id
+                AND m."deletedAt" IS NULL
+            JOIN "memberOrganizations" mo ON m.id = mo."memberId"
+                AND a."organizationId" = mo."organizationId"
+                AND mo."deletedAt" IS NULL
+                AND mo."dateEnd" IS NULL
+            WHERE a."organizationId" IN ($(ids:csv))
+        ),
+        member_data AS (
+            SELECT
+                os."segmentId",
+                os."organizationId",
+                count(DISTINCT a."memberId") AS "memberCount",
+                count(DISTINCT a.id) AS "activityCount",
+                CASE WHEN array_agg(DISTINCT a.platform) = ARRAY[NULL] THEN
+                    ARRAY[]::text[]
+                ELSE
+                    array_agg(DISTINCT a.platform)
+                END AS "activeOn",
+                max(a.timestamp) AS "lastActive",
+                min(a.timestamp) FILTER (WHERE a.timestamp <> '1970-01-01T00:00:00.000Z') AS "joinedAt"
+            FROM organization_segments os
+            LEFT JOIN activities_1 a ON a."organizationId" = os."organizationId"
+              AND a."segmentId" = os."segmentId"
+            GROUP BY os."segmentId", os."organizationId"
+        ),
+        identities AS (
+            SELECT
+                oi."organizationId",
+                jsonb_agg(oi) AS "identities"
+            FROM "organizationIdentities" oi
+            WHERE oi."organizationId" IN ($(ids:csv))
+            GROUP BY oi."organizationId"
+        )
+        SELECT
+            o.id AS "organizationId",
             md."segmentId",
             o."tenantId",
             o.address,
@@ -44,7 +89,7 @@ export class OrganizationRepository extends RepositoryBase<OrganizationRepositor
             o."createdAt",
             o."manuallyCreated",
             o.description,
-            coalesce(o."displayName", o.name) as "displayName",
+            o."displayName",
             o.emails,
             o."employeeCountByCountry",
             o.employees,
@@ -58,13 +103,11 @@ export class OrganizationRepository extends RepositoryBase<OrganizationRepositor
             o.location,
             o.logo,
             o.naics,
-            o.name,
             o."phoneNumbers",
             o.profiles,
             o."revenueRange",
             o.size,
             o.type,
-            o.url,
             o.website,
             o.linkedin,
             o.github,
@@ -88,17 +131,27 @@ export class OrganizationRepository extends RepositoryBase<OrganizationRepositor
             o."grossDeparturesByMonth",
             o."ultimateParent",
             o."immediateParent",
+            nullif (o."employeeChurnRate" -> '12_month', 'null')::decimal AS "employeeChurnRate12Month",
+            nullif (o."employeeGrowthRate" -> '12_month', 'null')::decimal AS "employeeGrowthRate12Month",
+            o.tags,
             md."joinedAt",
             md."lastActive",
             md."activeOn",
             md."activityCount",
             md."memberCount",
-            md.identities
-      from organizations o
-            left join member_data md on o.id = md."organizationId"
-      where o.id in ($(ids:csv))
-        and o."deletedAt" is null
-        and (md."organizationId" is not null or o."manuallyCreated");
+            i.identities,
+            coalesce(tmd.to_merge_ids, array []::text[])       as "toMergeIds",
+            coalesce(nmd.no_merge_ids, array []::text[])       as "noMergeIds",
+            o."weakIdentities"
+        FROM organizations o
+        LEFT JOIN member_data md ON o.id = md."organizationId"
+        LEFT JOIN identities i ON o.id = i."organizationId"
+        LEFT JOIN to_merge_data tmd on o.id = tmd."organizationId"
+        LEFT JOIN no_merge_data nmd on o.id = nmd."organizationId"
+        WHERE o.id IN ($(ids:csv))
+          AND o."deletedAt" IS NULL
+          AND (md."organizationId" IS NOT NULL
+              OR o."manuallyCreated");
       `,
       {
         ids,

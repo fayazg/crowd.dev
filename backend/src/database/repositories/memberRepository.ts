@@ -6,18 +6,20 @@ import {
   PlatformType,
   SyncStatus,
   OrganizationSource,
+  FeatureFlag,
 } from '@crowd/types'
 import lodash, { chunk } from 'lodash'
+import moment from 'moment'
 import Sequelize, { QueryTypes } from 'sequelize'
 
 import { FieldTranslatorFactory, OpensearchQueryParser } from '@crowd/opensearch'
+import { ActivityDisplayService } from '@crowd/integrations'
 import { KUBE_MODE, SERVICE } from '@/conf'
 import { ServiceType } from '../../conf/configTypes'
 import Error404 from '../../errors/Error404'
 import isFeatureEnabled from '../../feature-flags/isFeatureEnabled'
 import { PlatformIdentities } from '../../serverless/integrations/types/messageTypes'
-import ActivityDisplayService from '../../services/activityDisplayService'
-import { FeatureFlag, PageData } from '../../types/common'
+import { PageData } from '../../types/common'
 import {
   MemberSegmentAffiliation,
   MemberSegmentAffiliationJoined,
@@ -53,6 +55,17 @@ import MemberAffiliationRepository from './memberAffiliationRepository'
 const { Op } = Sequelize
 
 const log: boolean = false
+
+interface ActivityAggregates {
+  memberId: string
+  segmentId: string
+  activityCount: number
+  activeDaysCount: number
+  lastActive: string
+  activityTypes: string[]
+  activeOn: string[]
+  averageSentiment: number
+}
 
 class MemberRepository {
   static async create(data, options: IRepositoryOptions, doPopulateRelations = true) {
@@ -134,12 +147,7 @@ class MemberRepository {
       transaction,
     })
 
-    await MemberRepository.updateMemberOrganizations(
-      record,
-      data.organizations,
-      transaction,
-      options,
-    )
+    await MemberRepository.updateMemberOrganizations(record, data.organizations, true, options)
 
     await record.setTasks(data.tasks || [], {
       transaction,
@@ -260,7 +268,7 @@ class MemberRepository {
             AND ms."segmentId" IN (:segmentIds)
         ) AS "membersToMerge" 
       ORDER BY 
-        "membersToMerge"."joinedAt" DESC 
+        "membersToMerge"."similarity" DESC 
       LIMIT :limit OFFSET :offset
     `,
       {
@@ -565,7 +573,8 @@ class MemberRepository {
                     'dateEnd', "dateEnd",
                     'createdAt', "createdAt",
                     'updatedAt', "updatedAt",
-                    'title', title
+                    'title', title,
+                    'source', source
                   )
                 )
             ) AS orgs
@@ -688,7 +697,7 @@ class MemberRepository {
     await MemberRepository.updateMemberOrganizations(
       record,
       data.organizations,
-      transaction,
+      data.organizationsReplace,
       options,
     )
 
@@ -705,11 +714,11 @@ class MemberRepository {
     }
 
     if (data.affiliations) {
-      await this.setAffiliations(id, data.affiliations, options)
+      await MemberRepository.setAffiliations(id, data.affiliations, options)
     }
 
     if (options.currentSegments && options.currentSegments.length > 0) {
-      await MemberRepository.includeMemberToSegments(record.id, { ...options, transaction })
+      await MemberRepository.includeMemberToSegments(record.id, options)
     }
 
     const seq = SequelizeRepository.getSequelize(options)
@@ -859,6 +868,48 @@ class MemberRepository {
     return segments
   }
 
+  static async getActivityAggregates(
+    memberId: string,
+    options: IRepositoryOptions,
+  ): Promise<ActivityAggregates> {
+    const transaction = SequelizeRepository.getTransaction(options)
+    const seq = SequelizeRepository.getSequelize(options)
+    const currentTenant = SequelizeRepository.getCurrentTenant(options)
+
+    const query = `
+        SELECT
+        a."memberId",
+        a."segmentId",
+        count(a.id)::integer AS "activityCount",
+        max(a.timestamp) AS "lastActive",
+        array_agg(DISTINCT concat(a.platform, ':', a.type)) FILTER (WHERE a.platform IS NOT NULL) AS "activityTypes",
+        array_agg(DISTINCT a.platform) FILTER (WHERE a.platform IS NOT NULL) AS "activeOn",
+        count(DISTINCT a."timestamp"::date)::integer AS "activeDaysCount",
+        round(avg(
+            CASE WHEN (a.sentiment ->> 'sentiment'::text) IS NOT NULL THEN
+                (a.sentiment ->> 'sentiment'::text)::double precision
+            ELSE
+                NULL::double precision
+            END
+        )::numeric, 2):: float AS "averageSentiment"
+        FROM activities a
+        WHERE a."memberId" = :memberId
+        and a."tenantId" = :tenantId
+        GROUP BY a."memberId", a."segmentId"
+    `
+
+    const data: ActivityAggregates[] = await seq.query(query, {
+      replacements: {
+        memberId,
+        tenantId: currentTenant.id,
+      },
+      type: QueryTypes.SELECT,
+      transaction,
+    })
+
+    return data?.[0] || null
+  }
+
   static async setAffiliations(
     memberId: string,
     data: MemberSegmentAffiliation[],
@@ -884,7 +935,7 @@ class MemberRepository {
         s.name as "segmentName",
         s."parentName" as "segmentParentName", 
         o.id as "organizationId", 
-        o.name as "organizationName",
+        o."displayName" as "organizationName",
         o.logo as "organizationLogo",
         msa."dateStart" as "dateStart",
         msa."dateEnd" as "dateEnd"
@@ -959,11 +1010,11 @@ class MemberRepository {
     const include = [
       {
         model: options.database.organization,
-        attributes: ['id', 'name'],
+        attributes: ['id', 'displayName'],
         as: 'organizations',
         order: [['createdAt', 'ASC']],
         through: {
-          attributes: ['memberId', 'organizationId', 'dateStart', 'dateEnd', 'title'],
+          attributes: ['memberId', 'organizationId', 'dateStart', 'dateEnd', 'title', 'source'],
           where: {
             deletedAt: null,
           },
@@ -1015,7 +1066,7 @@ class MemberRepository {
       }
     }
 
-    data.affiliations = await this.getAffiliations(id, options)
+    data.affiliations = await MemberRepository.getAffiliations(id, options)
 
     return data
   }
@@ -2707,7 +2758,7 @@ class MemberRepository {
       include: [
         {
           model: options.database.organization,
-          attributes: ['id', 'name'],
+          attributes: ['id', 'displayName'],
           as: 'organizations',
         },
         {
@@ -3143,52 +3194,26 @@ class MemberRepository {
 
     const transaction = SequelizeRepository.getTransaction(options)
 
-    output.activities = await record.getActivities({
-      order: [['timestamp', 'DESC']],
-      transaction,
-    })
+    const activityAggregates = await MemberRepository.getActivityAggregates(output.id, options)
 
-    output.lastActivity = output.activities[0]?.get({ plain: true }) ?? null
+    output.activeOn = activityAggregates?.activeOn || []
+    output.activityCount = activityAggregates?.activityCount || 0
+    output.activityTypes = activityAggregates?.activityTypes || []
+    output.activeDaysCount = activityAggregates?.activeDaysCount || 0
+    output.averageSentiment = activityAggregates?.averageSentiment || 0
 
-    output.lastActive = output.activities[0]?.timestamp ?? null
+    output.lastActivity =
+      (
+        await record.getActivities({
+          order: [['timestamp', 'DESC']],
+          limit: 1,
+          transaction,
+        })
+      )[0]?.get({ plain: true }) ?? null
 
-    output.activeOn = [...new Set(output.activities.map((i) => i.platform))]
-
-    output.activityCount = output.activities.length
+    output.lastActive = output.lastActivity?.timestamp ?? null
 
     output.numberOfOpenSourceContributions = output.contributions?.length ?? 0
-
-    output.activityTypes = [...new Set(output.activities.map((i) => `${i.platform}:${i.type}`))]
-    output.activeDaysCount =
-      output.activities.reduce((acc, activity) => {
-        if (!acc.datetimeHashmap) {
-          acc.datetimeHashmap = {}
-          acc.count = 0
-        }
-        // strip hours from timestamp
-        const date = activity.timestamp.toISOString().split('T')[0]
-
-        if (!acc.datetimeHashmap[date]) {
-          acc.count += 1
-          acc.datetimeHashmap[date] = true
-        }
-
-        return acc
-      }, {}).count ?? 0
-
-    output.averageSentiment =
-      output.activityCount > 0
-        ? Math.round(
-            (output.activities.reduce((acc, i) => {
-              if (i.sentiment && 'sentiment' in i.sentiment) {
-                acc += i.sentiment.sentiment
-              }
-              return acc
-            }, 0) /
-              output.activities.filter((i) => i.sentiment && 'sentiment' in i.sentiment).length) *
-              100,
-          ) / 100
-        : 0
 
     output.tags = await record.getTags({
       transaction,
@@ -3199,7 +3224,7 @@ class MemberRepository {
     output.organizations = await record.getOrganizations({
       transaction,
       order: [['createdAt', 'ASC']],
-      joinTableAttributes: ['dateStart', 'dateEnd', 'title'],
+      joinTableAttributes: ['dateStart', 'dateEnd', 'title', 'source'],
       through: {
         where: {
           deletedAt: null,
@@ -3247,10 +3272,9 @@ class MemberRepository {
 
     output.affiliations = await this.getAffiliations(record.id, options)
 
-    const manualSyncRemote = await new MemberSyncRemoteRepository({
-      ...options,
-      transaction,
-    }).findMemberManualSync(record.id)
+    const manualSyncRemote = await new MemberSyncRemoteRepository(options).findMemberManualSync(
+      record.id,
+    )
 
     for (const syncRemote of manualSyncRemote) {
       if (output.attributes?.syncRemote) {
@@ -3268,33 +3292,34 @@ class MemberRepository {
   static async updateMemberOrganizations(
     record,
     organizations,
-    transaction,
+    replace,
     options: IRepositoryOptions,
   ) {
     if (!organizations) {
       return
     }
 
-    const sourceUi = !!organizations.find((org) => org.source === OrganizationSource.UI)
+    function iso(v) {
+      return moment(v).toISOString()
+    }
 
-    const originalOrgs = await MemberRepository.fetchWorkExperiences(record.id, sourceUi, options)
+    if (replace) {
+      const originalOrgs = await MemberRepository.fetchWorkExperiences(record.id, options)
 
-    const toDelete = originalOrgs.filter(
-      (originalOrg: any) =>
-        !organizations.find(
-          (newOrg) =>
-            originalOrg.organizationId === newOrg.id &&
-            originalOrg.title === (newOrg.title || null) &&
-            originalOrg.dateStart === (newOrg.startDate || null) &&
-            originalOrg.dateEnd === (newOrg.endDate || null),
-        ),
-    )
+      const toDelete = originalOrgs.filter(
+        (originalOrg: any) =>
+          !organizations.find(
+            (newOrg) =>
+              originalOrg.organizationId === newOrg.id &&
+              originalOrg.title === (newOrg.title || null) &&
+              iso(originalOrg.dateStart) === iso(newOrg.startDate || null) &&
+              iso(originalOrg.dateEnd) === iso(newOrg.endDate || null),
+          ),
+      )
 
-    for (const item of toDelete) {
-      await MemberRepository.deleteWorkExperience((item as any).id, {
-        transaction,
-        ...options,
-      })
+      for (const item of toDelete) {
+        await MemberRepository.deleteWorkExperience((item as any).id, options)
+      }
     }
 
     for (const item of organizations) {
@@ -3308,15 +3333,9 @@ class MemberRepository {
           dateEnd: org.endDate,
           source: org.source,
         },
-        {
-          transaction,
-          ...options,
-        },
+        options,
       )
-      await OrganizationRepository.includeOrganizationToSegments(org.id, {
-        transaction,
-        ...options,
-      })
+      await OrganizationRepository.includeOrganizationToSegments(org.id, options)
     }
   }
 
@@ -3438,18 +3457,13 @@ class MemberRepository {
     )
   }
 
-  static async fetchWorkExperiences(
-    memberId: string,
-    sourceUi: boolean,
-    options: IRepositoryOptions,
-  ) {
+  static async fetchWorkExperiences(memberId: string, options: IRepositoryOptions) {
     const seq = SequelizeRepository.getSequelize(options)
     const transaction = SequelizeRepository.getTransaction(options)
 
     const query = `
       SELECT * FROM "memberOrganizations"
       WHERE "memberId" = :memberId
-        ${sourceUi ? '' : "AND (source IS NULL OR source != 'ui')"}
         AND "deletedAt" IS NULL
     `
 

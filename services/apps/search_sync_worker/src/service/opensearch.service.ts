@@ -1,10 +1,10 @@
-import { OPENSEARCH_CONFIG } from '@/conf'
+import { OPENSEARCH_CONFIG } from '../conf'
 import {
   IndexVersions,
   OPENSEARCH_INDEX_MAPPINGS,
   OPENSEARCH_INDEX_SETTINGS,
   OpenSearchIndex,
-} from '@/types'
+} from '../types'
 import { Logger, LoggerBase } from '@crowd/logging'
 import { Client } from '@opensearch-project/opensearch'
 import { AwsSigv4Signer } from '@opensearch-project/opensearch/aws'
@@ -12,7 +12,7 @@ import { IIndexRequest, ISearchHit } from './opensearch.data'
 import { IS_DEV_ENV } from '@crowd/common'
 
 export class OpenSearchService extends LoggerBase {
-  private readonly client: Client
+  public readonly client: Client
   private readonly indexVersionMap: Map<OpenSearchIndex, string> = new Map()
 
   constructor(parentLog: Logger) {
@@ -282,6 +282,27 @@ export class OpenSearchService extends LoggerBase {
       }
       this.log.error(err, { id, index }, 'Failed to remove document from index!')
       throw new Error(`Failed to remove document with id: ${id} from index ${index}!`)
+    }
+  }
+
+  public async removeAllFromIndex(ids: string[], index: OpenSearchIndex): Promise<void> {
+    try {
+      const indexName = this.indexVersionMap.get(index)
+
+      await this.client.deleteByQuery({
+        index: indexName,
+        refresh: true,
+        body: {
+          query: {
+            terms: {
+              _id: ids,
+            },
+          },
+        },
+      })
+    } catch (err) {
+      this.log.error(err, { index }, 'Failed to remove documents from index!')
+      throw new Error(`Failed to remove documents from index ${index}!`)
     }
   }
 

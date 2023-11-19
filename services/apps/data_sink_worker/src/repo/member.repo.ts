@@ -42,6 +42,7 @@ export default class MemberRepository extends RepositoryBase<MemberRepository> {
       `${this.selectMemberQuery}
       where "tenantId" = $(tenantId)
       and $(email) = ANY ("emails")
+      limit 1
     `,
       {
         tenantId,
@@ -58,12 +59,9 @@ export default class MemberRepository extends RepositoryBase<MemberRepository> {
   ): Promise<IDbMember | null> {
     return await this.db().oneOrNone(
       `${this.selectMemberQuery}
-      where m.id in (select ms."memberId"
-                    from "memberSegments" ms
-                              inner join "memberIdentities" mi
-                                        on ms."tenantId" = mi."tenantId" and ms."memberId" = mi."memberId"
-                    where ms."tenantId" = $(tenantId)
-                      and ms."segmentId" = $(segmentId)
+      where m.id in (select mi."memberId"
+                    from "memberIdentities" mi
+                    where mi."tenantId" = $(tenantId)
                       and mi.platform = $(platform)
                       and mi.username = $(username));
     `,
@@ -130,9 +128,6 @@ export default class MemberRepository extends RepositoryBase<MemberRepository> {
         ...data,
         id,
         tenantId,
-        reach: {
-          total: -1,
-        },
         weakIdentities: JSON.stringify(data.weakIdentities || []),
         createdAt: ts,
         updatedAt: ts,
@@ -154,6 +149,8 @@ export default class MemberRepository extends RepositoryBase<MemberRepository> {
       },
     })
 
+    const updatedAt = new Date()
+
     const prepared = RepositoryBase.prepare(
       {
         ...data,
@@ -161,19 +158,21 @@ export default class MemberRepository extends RepositoryBase<MemberRepository> {
           data?.weakIdentities?.length > 0 && {
             weakIdentities: JSON.stringify(data.weakIdentities),
           }),
-        updatedAt: new Date(),
+        updatedAt,
       },
       dynamicColumnSet,
     )
     const query = this.dbInstance.helpers.update(prepared, dynamicColumnSet)
 
-    const condition = this.format('where id = $(id) and "tenantId" = $(tenantId)', {
-      id,
-      tenantId,
-    })
-    const result = await this.db().result(`${query} ${condition}`)
-
-    this.checkUpdateRowCount(result.rowCount, 1)
+    const condition = this.format(
+      'where id = $(id) and "tenantId" = $(tenantId) and "updatedAt" < $(updatedAt)',
+      {
+        id,
+        tenantId,
+        updatedAt,
+      },
+    )
+    await this.db().result(`${query} ${condition}`)
   }
 
   public async getIdentities(memberId: string, tenantId: string): Promise<IMemberIdentity[]> {
@@ -271,5 +270,81 @@ export default class MemberRepository extends RepositoryBase<MemberRepository> {
         status: SyncStatus.NEVER,
       },
     )
+  }
+
+  public async getMemberIdsAndEmailsAndCount(
+    tenantId: string,
+    segmentIds: string[],
+    { limit = 20, offset = 0, orderBy = 'joinedAt_DESC', countOnly = false },
+  ) {
+    let orderByString = ''
+    const orderByParts = orderBy.split('_')
+    const direction = orderByParts[1].toLowerCase()
+
+    switch (orderByParts[0]) {
+      case 'joinedAt':
+        orderByString = 'm."joinedAt"'
+        break
+      case 'displayName':
+        orderByString = 'm."displayName"'
+        break
+      case 'reach':
+        orderByString = "(m.reach ->> 'total')::int"
+        break
+      case 'score':
+        orderByString = 'm.score'
+        break
+
+      default:
+        throw new Error(`Invalid order by: ${orderBy}!`)
+    }
+
+    orderByString = `${orderByString} ${direction}`
+
+    const memberCount = await this.db().one(
+      `
+      SELECT count(*) FROM (
+        SELECT m.id
+        FROM "members" m
+        JOIN "memberSegments" ms ON ms."memberId" = m.id
+        WHERE m."tenantId" = $(tenantId)
+        AND ms."segmentId" = ANY($(segmentIds)::uuid[])
+      ) as count
+      `,
+      {
+        tenantId,
+        segmentIds,
+      },
+    )
+
+    if (countOnly) {
+      return {
+        totalCount: Number(memberCount.count),
+        members: [],
+      }
+    }
+
+    const members = await this.db().any(
+      `
+      SELECT m.id, m.emails
+      FROM "members" m
+      JOIN "memberSegments" ms ON ms."memberId" = m.id
+      WHERE m."tenantId" = $(tenantId)
+      AND ms."segmentId" = ANY($(segmentIds)::uuid[])
+      ORDER BY ${orderByString}
+      LIMIT $(limit) OFFSET $(offset)
+      `,
+      {
+        tenantId,
+        segmentIds,
+        limit,
+        offset,
+      },
+    )
+
+    return {
+      totalCount: Number(memberCount.count),
+      members: members,
+    }
   }
 }

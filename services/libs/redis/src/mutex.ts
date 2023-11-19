@@ -22,7 +22,9 @@ export const acquireLock = async (
       throw new TimeoutError(diff / 1000, 's')
     }
 
-    await timeout(200)
+    // Randomize timeout between 100ms and 300ms
+    const randomTimeout = Math.floor(Math.random() * (300 - 100 + 1)) + 100
+    await timeout(randomTimeout)
     result = await client.set(key, value, {
       EX: expireAfterSeconds,
       NX: true,
@@ -48,13 +50,13 @@ export const releaseLock = async (
   })
 }
 
-export const processWithLock = async <T = void>(
+export const processWithLock = async <T>(
   client: RedisClient,
   key: string,
   expireAfterSeconds: number,
   timeoutAfterSeconds: number,
   process: () => Promise<T>,
-): Promise<T | void> => {
+): Promise<T> => {
   const value = generateUUIDv4()
 
   await acquireLock(client, key, value, expireAfterSeconds, timeoutAfterSeconds)

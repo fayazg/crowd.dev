@@ -1,3 +1,5 @@
+import { ITemporalConfig } from '@crowd/temporal'
+
 export enum ServiceType {
   API = 'api',
   NODEJS_WORKER = 'nodejs-worker',
@@ -99,6 +101,7 @@ export interface DevtoConfiguration {
 export interface TwitterConfiguration {
   clientId: string
   clientSecret: string
+  callbackUrl: string
   globalLimit?: number
   maxRetrospectInSeconds: number
   limitResetFrequencyDays: number
@@ -238,4 +241,8 @@ export interface CrowdAnalyticsConfiguration {
   tenantId: string
   baseUrl: string
   apiToken: string
+}
+
+export interface IBackendTemporalConfig extends ITemporalConfig {
+  automationsTaskQueue: string
 }

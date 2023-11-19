@@ -131,7 +131,7 @@ import { OrganizationService } from '@/modules/organization/organization-service
 import Errors from '@/shared/error/errors';
 import Message from '@/shared/message/message';
 import { i18n } from '@/i18n';
-import { attributesTypes } from '@/modules/organization/types/Attributes';
+import { AttributeType } from '@/modules/organization/types/Attributes';
 
 const LoaderIcon = h(
   'i',
@@ -170,6 +170,7 @@ const formSchema = new FormSchema([
   fields.linkedin,
   fields.crunchbase,
   fields.emails,
+  fields.identities,
   fields.phoneNumbers,
   fields.type,
   fields.size,
@@ -203,30 +204,19 @@ function getInitialModel(record) {
   return JSON.parse(
     JSON.stringify(
       formSchema.initialValues({
+        ...(record || {}),
         name: record ? record.name : '',
         displayName: record ? record.displayName || record.name : '',
         headline: record ? record.headline : '',
         description: record ? record.description : '',
         joinedAt: record ? record.joinedAt : '',
-        employees: record ? record.employees : null,
-        location: record ? record.location : null,
-        website: record ? record.website : null,
-        github:
-          record && record.github
-            ? record.github.handle
-            : '',
-        twitter:
-          record && record.twitter
-            ? record.twitter.handle
-            : '',
-        linkedin:
-          record && record.linkedin
-            ? record.linkedin.handle
-            : '',
-        crunchbase:
-          record && record.crunchbase
-            ? record.crunchbase.handle
-            : '',
+        identities: record ? [...record.identities.map((i) => ({
+          ...i,
+          platform: i.platform,
+          name: i.name,
+          username: i.url ? i.url.split('/').at(-1) : null,
+          url: i.url,
+        }))] : [],
         revenueRange: record ? record.revenueRange : {},
         emails:
           record && record.emails?.length > 0
@@ -236,29 +226,6 @@ function getInitialModel(record) {
           record && record.phoneNumbers?.length > 0
             ? record.phoneNumbers
             : [''],
-        type: record ? record.type : null,
-        size: record ? record.size : null,
-        industry: record ? record.industry : null,
-        founded: record ? record.founded : null,
-        profiles: record ? record.profiles : null,
-        affiliatedProfiles: record ? record.affiliatedProfiles : null,
-        allSubsidiaries: record ? record.allSubsidiaries : null,
-        alternativeDomains: record ? record.alternativeDomains : null,
-        alternativeNames: record ? record.alternativeNames : null,
-        averageEmployeeTenure: record ? record.averageEmployeeTenure : null,
-        averageTenureByLevel: record ? record.averageTenureByLevel : null,
-        averageTenureByRole: record ? record.averageTenureByRole : null,
-        directSubsidiaries: record ? record.directSubsidiaries : null,
-        employeeChurnRate: record ? record.employeeChurnRate : null,
-        employeeCountByCountry: record ? record.employeeCountByCountry : null,
-        employeeCountByMonth: record ? record.employeeCountByMonth : null,
-        employeeGrowthRate: record ? record.employeeGrowthRate : null,
-        gicsSector: record ? record.gicsSector : null,
-        grossAdditionsByMonth: record ? record.grossAdditionsByMonth : null,
-        grossDeparturesByMonth: record ? record.grossDeparturesByMonth : null,
-        immediateParent: record ? record.immediateParent : null,
-        tags: record ? record.tags : null,
-        ultimateParent: record ? record.ultimateParent : null,
       }),
     ),
   );
@@ -297,7 +264,7 @@ const shouldShowAttributes = computed(() => enrichmentAttributes.some((a) => {
     return false;
   }
 
-  if (a.type === attributesTypes.array) {
+  if (a.type === AttributeType.ARRAY) {
     return !!record.value?.[a.name]?.length;
   }
 
@@ -384,17 +351,9 @@ function onCancel() {
   router.push({ name: 'organization' });
 }
 
-function platformPayload(platform, value) {
-  if (value && value !== '') {
-    return {
-      handle: value,
-      url: `https://${platform}.com/${value}`,
-    };
-  }
-  return undefined;
-}
 async function onSubmit() {
   isFormSubmitting.value = true;
+
   const data = {
     manuallyCreated: true,
     ...formModel.value,
@@ -406,6 +365,12 @@ async function onSubmit() {
       }
       return acc;
     }, []),
+    identities: formModel.value.identities.filter((i) => i.username?.length > 0 || i.organizationId).map((i) => ({
+      ...i,
+      platform: i.platform,
+      url: i.url,
+      name: i.name,
+    })),
     phoneNumbers: formModel.value.phoneNumbers.reduce(
       (acc, item) => {
         if (item !== '') {
@@ -415,27 +380,6 @@ async function onSubmit() {
       },
       [],
     ),
-    github: formModel.value.github
-      ? platformPayload('github', formModel.value.github)
-      : null,
-    linkedin: formModel.value.linkedin
-      ? platformPayload(
-        'linkedin',
-        formModel.value.linkedin,
-      )
-      : null,
-    twitter: formModel.value.twitter
-      ? platformPayload(
-        'twitter',
-        formModel.value.twitter,
-      )
-      : null,
-    crunchbase: formModel.value.crunchbase
-      ? platformPayload(
-        'crunchbase',
-        formModel.value.crunchbase,
-      )
-      : null,
   };
 
   const payload = isEditPage.value

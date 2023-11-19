@@ -1,14 +1,14 @@
 import { getServiceChildLogger } from '@crowd/logging'
-import getUserContext from '../../../../../database/utils/getUserContext'
-import ActivityRepository from '../../../../../database/repositories/activityRepository'
-import AutomationRepository from '../../../../../database/repositories/automationRepository'
 import {
-  AutomationData,
   AutomationState,
   AutomationTrigger,
   AutomationType,
+  IAutomationData,
   NewActivitySettings,
-} from '../../../../../types/automationTypes'
+} from '@crowd/types'
+import getUserContext from '../../../../../database/utils/getUserContext'
+import ActivityRepository from '../../../../../database/repositories/activityRepository'
+import AutomationRepository from '../../../../../database/repositories/automationRepository'
 import { sendWebhookProcessRequest } from './util'
 import { prepareMemberPayload } from './newMemberWorker'
 import AutomationExecutionRepository from '../../../../../database/repositories/automationExecutionRepository'
@@ -24,7 +24,7 @@ const log = getServiceChildLogger('newActivityWorker')
  */
 export const shouldProcessActivity = async (
   activity: any,
-  automation: AutomationData,
+  automation: IAutomationData,
 ): Promise<boolean> => {
   const settings = automation.settings as NewActivitySettings
 
@@ -75,6 +75,13 @@ export const shouldProcessActivity = async (
   ) {
     log.warn(
       `Ignoring automation ${automation.id} - Activity ${activity.id} belongs to a team member!`,
+    )
+    process = false
+  }
+
+  if (activity?.member?.attributes?.isBot && activity?.member?.attributes?.isBot.default) {
+    log.warn(
+      `Ignoring automation ${automation.id} - Activity ${activity.id} belongs to a bot, cannot be processed automaticaly!`,
     )
     process = false
   }

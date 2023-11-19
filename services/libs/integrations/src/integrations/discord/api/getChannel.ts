@@ -1,7 +1,7 @@
 import axios, { AxiosRequestConfig } from 'axios'
 import { handleDiscordError } from './errorHandler'
 import { DiscordApiChannel } from '../types'
-import { IProcessStreamContext } from '@/types'
+import { IProcessStreamContext } from '../../../types'
 
 export const getChannel = async (
   channelId: string,
@@ -21,6 +21,8 @@ export const getChannel = async (
     return response.data
   } catch (err) {
     const newErr = handleDiscordError(err, config, { channelId }, ctx)
-    throw newErr
+    if (newErr) {
+      throw newErr
+    }
   }
 }

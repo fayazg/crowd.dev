@@ -1,11 +1,11 @@
 import { MessageBodyAttributeMap } from 'aws-sdk/clients/sqs'
 import moment from 'moment'
 import { getServiceChildLogger } from '@crowd/logging'
+import { AutomationTrigger } from '@crowd/types'
 import { NodeWorkerMessageBase } from '../../types/mq/nodeWorkerMessageBase'
 import { IS_TEST_ENV, SQS_CONFIG } from '../../conf'
 import { sendMessage } from '../../utils/sqs'
 import { NodeWorkerMessageType } from '../types/workerTypes'
-import { AutomationTrigger } from '../../types/automationTypes'
 import { ExportableEntity } from '../microservices/nodejs/messageTypes'
 
 const log = getServiceChildLogger('nodeWorkerSQS')
@@ -62,10 +62,12 @@ export const sendNodeWorkerMessage = async (
     delayed = true
   }
 
+  const now = moment().valueOf()
+
   const params = {
     QueueUrl: delayed ? SQS_CONFIG.nodejsWorkerDelayableQueue : SQS_CONFIG.nodejsWorkerQueue,
-    MessageGroupId: delayed ? undefined : tenantId,
-    MessageDeduplicationId: delayed ? undefined : `${tenantId}-${moment().valueOf()}`,
+    MessageGroupId: delayed ? undefined : `${now}`,
+    MessageDeduplicationId: delayed ? undefined : `${tenantId}-${now}`,
     MessageBody: JSON.stringify(body),
     MessageAttributes: attributes,
     DelaySeconds: delay,
@@ -149,4 +151,21 @@ export const sendBulkEnrichMessage = async (
     skipCredits,
   }
   await sendNodeWorkerMessage(tenant, payload as NodeWorkerMessageBase)
+}
+
+export const sendOrgMergeMessage = async (
+  tenantId: string,
+  primaryOrgId: string,
+  secondaryOrgId: string,
+  notifyFrontend: boolean = true,
+): Promise<void> => {
+  const payload = {
+    type: NodeWorkerMessageType.NODE_MICROSERVICE,
+    service: 'org-merge',
+    tenantId,
+    primaryOrgId,
+    secondaryOrgId,
+    notifyFrontend,
+  }
+  await sendNodeWorkerMessage(tenantId, payload as NodeWorkerMessageBase)
 }

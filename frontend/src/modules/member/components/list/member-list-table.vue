@@ -2,18 +2,21 @@
   <div>
     <div
       v-if="loading"
-      v-loading="loading"
-      class="app-page-spinner h-16 !relative !min-h-5"
-    />
+      class="h-16 !relative !min-h-5 flex justify-center items-center"
+    >
+      <div class="animate-spin w-fit">
+        <div class="custom-spinner" />
+      </div>
+    </div>
     <div v-else>
       <!-- Empty State -->
       <app-empty-state-cta
         v-if="!hasIntegrations && !hasMembers"
         icon="ri-contacts-line"
-        title="No community members yet"
+        title="No community contacts yet"
         description="Please connect with one of our available data sources in order to start pulling data from a certain platform"
         cta-btn="Connect integrations"
-        secondary-btn="Add member"
+        secondary-btn="Add contacts"
         @cta-click="onCtaClick"
         @secondary-click="onSecondaryBtnClick"
       />
@@ -21,15 +24,15 @@
       <app-empty-state-cta
         v-else-if="hasIntegrations && !hasMembers"
         icon="ri-contacts-line"
-        title="No community members yet"
-        description="Please consider that the first members may take a couple of minutes to be displayed"
+        title="No community contacts yet"
+        description="Please consider that the first contacts may take a couple of minutes to be displayed"
         :has-warning-icon="true"
       />
 
       <app-empty-state-cta
         v-else-if="hasMembers && !totalMembers"
         icon="ri-contacts-line"
-        title="No members found"
+        title="No contacts found"
         description="We couldn't find any results that match your search criteria, please try a different query"
       />
 
@@ -42,7 +45,7 @@
             :current-page="pagination.page"
             :has-page-counter="false"
             :export="doExport"
-            module="member"
+            module="contact"
             position="top"
             @change-sorter="doChangePaginationPageSize"
           />
@@ -97,7 +100,7 @@
               <el-table-column type="selection" width="75" fixed />
 
               <el-table-column
-                label="Member"
+                label="Contact"
                 prop="displayName"
                 width="250"
                 fixed
@@ -260,8 +263,8 @@
                 <template #header>
                   <el-tooltip placement="top">
                     <template #content>
-                      This refers to the total # of open source contributions a member did on GitHub.<br />
-                      To receive this attribute you have to enrich your members.
+                      This refers to the total # of open source contributions a contact did on GitHub.<br />
+                      To receive this attribute you have to enrich your contacts.
                     </template>
                     # of open source contributions
                   </el-tooltip>
@@ -313,7 +316,7 @@
                       class="text-sm cursor-auto flex flex-wrap gap-1"
                     >
                       <el-tooltip
-                        v-for="email of scope.row.emails"
+                        v-for="email of scope.row.emails.slice(0, 3)"
                         :key="email"
                         :disabled="!email"
                         popper-class="custom-identity-tooltip"
@@ -336,6 +339,45 @@
                           >{{ email }}</a>
                         </div>
                       </el-tooltip>
+                      <el-popover
+                        v-if="scope.row.emails?.length > 3"
+                        placement="top"
+                        :width="400"
+                        trigger="hover"
+                        popper-class="support-popover"
+                      >
+                        <template #reference>
+                          <span
+                            class="badge--interactive hover:text-gray-900"
+                          >+{{ scope.row.emails.length - 3 }}</span>
+                        </template>
+                        <div class="flex flex-wrap gap-3 my-1">
+                          <el-tooltip
+                            v-for="email of scope.row.emails.slice(3)"
+                            :key="email"
+                            :disabled="!email"
+                            popper-class="custom-identity-tooltip flex "
+                            placement="top"
+                          >
+                            <template #content>
+                              <span>Send email
+                                <i
+                                  v-if="email"
+                                  class="ri-external-link-line text-gray-400"
+                                /></span>
+                            </template>
+                            <div @click.prevent>
+                              <a
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="badge--interactive"
+                                :href="`mailto:${email}`"
+                                @click.stop="trackEmailClick"
+                              >{{ email }}</a>
+                            </div>
+                          </el-tooltip>
+                        </div>
+                      </el-popover>
                     </div>
                     <span v-else class="text-gray-500">-</span>
                   </router-link>
@@ -369,10 +411,18 @@
                     class="block w-full"
                   >
                     <div class="h-full flex items-center justify-center w-full">
-                      <app-member-dropdown
-                        :member="scope.row"
-                        @merge="isMergeDialogOpen = scope.row"
-                      />
+                      <button
+                        :id="`buttonRef-${scope.row.id}`"
+                        :ref="(el) => setActionBtnsRef(el, scope.row.id)"
+                        class="el-dropdown-link btn p-1.5 rounder-md hover:bg-gray-200 text-gray-600"
+                        type="button"
+                        @click.prevent.stop="() => onActionBtnClick(scope.row)"
+                      >
+                        <i
+                          :id="`buttonRefIcon-${scope.row.id}`"
+                          class="text-xl ri-more-fill"
+                        />
+                      </button>
                     </div>
                   </router-link>
                 </template>
@@ -384,7 +434,7 @@
                 :total="totalMembers"
                 :page-size="Number(pagination.perPage)"
                 :current-page="pagination.page || 1"
-                module="member"
+                module="contact"
                 @change-current-page="doChangePaginationCurrentPage"
                 @change-page-size="doChangePaginationPageSize"
               />
@@ -393,6 +443,25 @@
         </div>
       </div>
     </div>
+    <el-popover
+      ref="memberDropdownPopover"
+      placement="bottom-end"
+      popper-class="popover-dropdown"
+      :virtual-ref="actionBtnRefs[selectedActionMember?.id]"
+      trigger="click"
+      :visible="showMemberDropdownPopover"
+      virtual-triggering
+      @hide="onHide"
+    >
+      <div v-click-outside="onClickOutside">
+        <app-member-dropdown-content
+          v-if="selectedActionMember"
+          :member="selectedActionMember"
+          @merge="isMergeDialogOpen = selectedActionMember"
+          @close-dropdown="closeDropdown"
+        />
+      </div>
+    </el-popover>
     <app-member-merge-dialog v-model="isMergeDialogOpen" />
     <app-tag-popover v-model="isEditTagsDialogOpen" :member="editTagMember" @reload="fetchMembers({ reload: true })" />
   </div>
@@ -404,6 +473,8 @@ import { useRouter } from 'vue-router';
 import {
   computed, onMounted, onUnmounted, ref, defineProps, watch,
 } from 'vue';
+import { ClickOutside as vClickOutside } from 'element-plus';
+import { storeToRefs } from 'pinia';
 import { i18n } from '@/i18n';
 import AppMemberListToolbar from '@/modules/member/components/list/member-list-toolbar.vue';
 import AppMemberOrganizations from '@/modules/member/components/member-organizations.vue';
@@ -411,13 +482,12 @@ import AppTagList from '@/modules/tag/components/tag-list.vue';
 import { formatDateToTimeAgo } from '@/utils/date';
 import { formatNumberToCompact, formatNumber } from '@/utils/number';
 import { useMemberStore } from '@/modules/member/store/pinia';
-import { storeToRefs } from 'pinia';
 import { MemberService } from '@/modules/member/member-service';
 import AppMemberMergeDialog from '@/modules/member/components/member-merge-dialog.vue';
 import AppTagPopover from '@/modules/tag/components/tag-popover.vue';
 import AppPagination from '@/shared/pagination/pagination.vue';
 import AppMemberBadge from '../member-badge.vue';
-import AppMemberDropdown from '../member-dropdown.vue';
+import AppMemberDropdownContent from '../member-dropdown-content.vue';
 import AppMemberIdentities from '../member-identities.vue';
 import AppMemberReach from '../member-reach.vue';
 import AppMemberEngagementLevel from '../member-engagement-level.vue';
@@ -437,6 +507,11 @@ const isCursorDown = ref(false);
 const isMergeDialogOpen = ref(null);
 const isEditTagsDialogOpen = ref(false);
 const editTagMember = ref(null);
+
+const showMemberDropdownPopover = ref(false);
+const memberDropdownPopover = ref(null);
+const actionBtnRefs = ref({});
+const selectedActionMember = ref(null);
 
 const props = defineProps({
   hasIntegrations: {
@@ -537,6 +612,39 @@ document.onmouseup = () => {
   // according to wether the mouse is hovering the table or not
   isScrollbarVisible.value = isTableHovered.value;
   isCursorDown.value = false;
+};
+
+const setActionBtnsRef = (el, id) => {
+  if (el) {
+    actionBtnRefs.value[id] = el;
+  }
+};
+
+const onActionBtnClick = (member) => {
+  if (selectedActionMember.value?.id === member.id) {
+    showMemberDropdownPopover.value = false;
+
+    setTimeout(() => {
+      selectedActionMember.value = null;
+    }, 200);
+  } else {
+    showMemberDropdownPopover.value = true;
+    selectedActionMember.value = member;
+  }
+};
+
+const closeDropdown = () => {
+  showMemberDropdownPopover.value = false;
+
+  setTimeout(() => {
+    selectedActionMember.value = null;
+  }, 200);
+};
+
+const onClickOutside = (el) => {
+  if (!el.target?.id.includes('buttonRef')) {
+    closeDropdown();
+  }
 };
 
 function handleEditTagsDialog(member) {
@@ -656,9 +764,9 @@ const doExport = () => MemberService.export({
   offset: null,
 });
 
-onMounted(async () => {
+onMounted(() => {
   if (store.state.integration.count === 0) {
-    await store.dispatch('integration/doFetch');
+    store.dispatch('integration/doFetch');
   }
 });
 
@@ -706,5 +814,10 @@ export default {
 }
 .el-table__body {
   height: 1px;
+}
+
+.popover-dropdown {
+  padding: 0.5rem !important;
+  width: fit-content !important;
 }
 </style>

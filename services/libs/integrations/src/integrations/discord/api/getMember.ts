@@ -1,7 +1,7 @@
 import axios, { AxiosRequestConfig } from 'axios'
 import { DiscordApiMember } from '../types'
 import { handleDiscordError } from './errorHandler'
-import { IProcessStreamContext } from '@/types'
+import { IProcessStreamContext } from '../../../types'
 
 export const getMember = async (
   guildId: string,
@@ -23,6 +23,8 @@ export const getMember = async (
     return response.data
   } catch (err) {
     const newErr = handleDiscordError(err, config, { guildId, userId }, ctx)
-    throw newErr
+    if (newErr) {
+      throw newErr
+    }
   }
 }

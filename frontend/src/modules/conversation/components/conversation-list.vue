@@ -9,9 +9,12 @@
     />
     <div
       v-if="loading && !conversations.length"
-      v-loading="loading"
-      class="app-page-spinner h-16 !relative !min-h-5"
-    />
+      class="h-16 !relative !min-h-5 flex justify-center items-center"
+    >
+      <div class="animate-spin w-fit">
+        <div class="custom-spinner" />
+      </div>
+    </div>
     <div v-else>
       <!-- Empty state -->
       <app-empty-state-cta
@@ -121,7 +124,7 @@ const onLoadMore = () => {
 };
 
 const fetch = ({
-  filter, offset, limit, orderBy, body, append,
+  filter, offset = 0, limit = 20, orderBy, body, append,
 }) => {
   loading.value = true;
   fetchConversation({

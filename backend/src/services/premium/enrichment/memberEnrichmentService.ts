@@ -10,8 +10,8 @@ import {
   MemberEnrichmentAttributeName,
   MemberEnrichmentAttributes,
   PlatformType,
-  IOrganization,
   OrganizationSource,
+  SyncMode,
 } from '@crowd/types'
 import { ENRICHMENT_CONFIG, REDIS_CONFIG } from '../../../conf'
 import { AttributeData } from '../../../database/attributes/attribute'
@@ -36,7 +36,7 @@ import OrganizationService from '../../organizationService'
 import MemberRepository from '../../../database/repositories/memberRepository'
 import OrganizationRepository from '../../../database/repositories/organizationRepository'
 import SequelizeRepository from '@/database/repositories/sequelizeRepository'
-import { getSearchSyncWorkerEmitter } from '@/serverless/utils/serviceSQS'
+import SearchSyncService from '@/services/searchSyncService'
 
 export default class MemberEnrichmentService extends LoggerBase {
   options: IServiceOptions
@@ -145,7 +145,7 @@ export default class MemberEnrichmentService extends LoggerBase {
 
   async bulkEnrich(memberIds: string[], notifyFrontend: boolean = true) {
     const redis = await getRedisClient(REDIS_CONFIG, true)
-    const searchSyncEmitter = await getSearchSyncWorkerEmitter()
+    const searchSyncService = new SearchSyncService(this.options, SyncMode.ASYNCHRONOUS)
 
     const apiPubSubEmitter = new RedisPubSubEmitter(
       'api-pubsub',
@@ -160,7 +160,7 @@ export default class MemberEnrichmentService extends LoggerBase {
       try {
         await this.enrichOne(memberId)
         enrichedMembers++
-        await searchSyncEmitter.triggerMemberSync(this.options.currentTenant.id, memberId)
+        await searchSyncService.triggerMemberSync(this.options.currentTenant.id, memberId)
         this.log.info(`Enriched member ${memberId}`)
       } catch (err) {
         if (
@@ -237,7 +237,7 @@ export default class MemberEnrichmentService extends LoggerBase {
         await this.getAttributes()
       }
 
-      const searchSyncEmitter = await getSearchSyncWorkerEmitter()
+      const searchSyncService = new SearchSyncService(this.options, SyncMode.ASYNCHRONOUS)
 
       // Create an instance of the MemberService and use it to look up the member
       const memberService = new MemberService(options)
@@ -267,19 +267,56 @@ export default class MemberEnrichmentService extends LoggerBase {
         return null
       }
 
+      // To preserve the original member object, creating a deep copy
+      const memberCopy = JSON.parse(JSON.stringify(member))
+      const normalized = await this.normalize(memberCopy, enrichmentData)
+
+      if (normalized.username) {
+        const filteredUsername = Object.keys(normalized.username).reduce((obj, key) => {
+          if (!member.username[key]) {
+            obj[key] = normalized.username[key]
+          }
+          return obj
+        }, {})
+
+        for (const [platform, usernames] of Object.entries(filteredUsername)) {
+          const usernameArray = Array.isArray(usernames) ? usernames : [usernames]
+
+          for (const username of usernameArray) {
+            // Check if a member with this username already exists
+            const existingMember = await memberService.memberExists(username, platform)
+
+            if (existingMember) {
+              await memberService.merge(memberId, existingMember.id, {
+                doSync: false,
+                mode: SyncMode.ASYNCHRONOUS,
+              })
+
+              // we also need to trigger remove existing member from opensearch, because the transaction isn't commited yet while merging
+              await searchSyncService.triggerRemoveMember(
+                this.options.currentTenant.id,
+                existingMember.id,
+              )
+            }
+          }
+        }
+      }
+
       // save raw data to cache
       await MemberEnrichmentCacheRepository.upsert(memberId, enrichmentData, options)
-
-      const normalized = await this.normalize(member, enrichmentData)
 
       // We are updating the displayName only if the existing one has one word only
       // And we are using an update here instead of the upsert because
       // upsert always takes the existing displayName
       if (!/\W/.test(member.displayName)) {
         if (enrichmentData.first_name && enrichmentData.last_name) {
-          await memberService.update(member.id, {
-            displayName: `${enrichmentData.first_name} ${enrichmentData.last_name}`,
-          })
+          await memberService.update(
+            member.id,
+            {
+              displayName: `${enrichmentData.first_name} ${enrichmentData.last_name}`,
+            },
+            false,
+          )
         }
       }
 
@@ -308,9 +345,20 @@ export default class MemberEnrichmentService extends LoggerBase {
       const organizationService = new OrganizationService(options)
       if (enrichmentData.work_experiences) {
         for (const workExperience of enrichmentData.work_experiences) {
-          const org = await organizationService.findOrCreate({
-            name: workExperience.company,
-          })
+          const org = await organizationService.createOrUpdate(
+            {
+              identities: [
+                {
+                  name: workExperience.company,
+                  platform: PlatformType.ENRICHMENT,
+                },
+              ],
+            },
+            {
+              doSync: true,
+              mode: SyncMode.ASYNCHRONOUS,
+            },
+          )
 
           const dateEnd = workExperience.endDate
             ? moment.utc(workExperience.endDate).toISOString()
@@ -329,7 +377,7 @@ export default class MemberEnrichmentService extends LoggerBase {
         }
       }
 
-      await searchSyncEmitter.triggerMemberSync(options.currentTenant.id, result.id)
+      await searchSyncService.triggerMemberSync(this.options.currentTenant.id, result.id)
 
       result = await memberService.findById(result.id, true, false)
       await SequelizeRepository.commitTransaction(transaction)
@@ -352,39 +400,6 @@ export default class MemberEnrichmentService extends LoggerBase {
       )
       member.emails.forEach((email) => emailSet.add(email))
       member.emails = Array.from(emailSet)
-    }
-
-    if (enrichmentData.company) {
-      const organization: IOrganization = {
-        name: enrichmentData.company,
-      }
-
-      // check for more info about the company in work experiences
-      if (enrichmentData.work_experiences && enrichmentData.work_experiences.length > 0) {
-        const organizationsByWorkExperience = enrichmentData.work_experiences.filter(
-          (w) => w.company === enrichmentData.company && w.current,
-        )
-        if (organizationsByWorkExperience.length > 0) {
-          organization.location = organizationsByWorkExperience[0].location
-          const linkedinUrl = organizationsByWorkExperience[0].companyLinkedInUrl
-          if (linkedinUrl) {
-            organization.linkedin = {
-              handle: linkedinUrl.split('/').pop(),
-              // remove https/http if exists
-              url: linkedinUrl.replace(/(^\w+:|^)\/\//, ''),
-            }
-          }
-          organization.url = organizationsByWorkExperience[0].companyUrl
-
-          // fetch jobTitle from most recent work experience
-          member.attributes.jobTitle = {
-            custom: organizationsByWorkExperience[0].title,
-            default: organizationsByWorkExperience[0].title,
-          }
-        }
-      }
-
-      member.organizations = [organization]
     }
 
     member.contributions = enrichmentData.oss_contributions?.map(
